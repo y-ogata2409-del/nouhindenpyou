@@ -1,0 +1,380 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-title" content="納品伝票">
+<title>納品伝票スキャン</title>
+<style>
+  body { font-family: -apple-system, "Hiragino Sans", sans-serif; margin: 0; padding: 16px; background: #f5f5f5; color: #222; }
+  .card { background: #fff; border-radius: 12px; padding: 14px; margin-bottom: 12px; }
+  .sel { display: flex; gap: 8px; }
+  .sel select, .sel input { flex: 1; font-size: 17px; padding: 10px; border: 1px solid #ccc; border-radius: 8px; background: #fff; min-width: 0; }
+  .total { text-align: center; }
+  .total .amount { font-size: 32px; font-weight: bold; }
+  .total .sub { color: #666; font-size: 13px; }
+  .shoot { display: block; width: 100%; padding: 18px; font-size: 18px; font-weight: bold; color: #fff;
+           background: #1a73e8; border: none; border-radius: 12px; text-align: center; box-sizing: border-box; margin-top: 10px; }
+  .shoot.secondary { background: #fff; color: #1a73e8; border: 2px solid #1a73e8; }
+  .shoot.off { opacity: .4; pointer-events: none; }
+  input[type=file] { display: none; }
+  #cam { display: none; position: fixed; inset: 0; background: #000; z-index: 100; }
+  #cam video { width: 100%; height: 100%; object-fit: contain; background: #000; }
+  #camStat { position: absolute; top: 0; left: 0; right: 0; padding: calc(env(safe-area-inset-top, 0px) + 10px) 12px 10px;
+             color: #fff; background: rgba(0,0,0,.5); font-size: 15px; text-align: center; }
+  #camMsg { position: absolute; inset: 0; display: flex; align-items: center; justify-content: center; color: #fff; text-align: center; padding: 20px; pointer-events: none; }
+  #lastImg { position: absolute; left: 16px; bottom: calc(env(safe-area-inset-bottom, 0px) + 36px); width: 64px; height: 64px;
+             object-fit: cover; border-radius: 8px; border: 2px solid #fff; display: none; }
+  #flash { position: absolute; inset: 0; background: #fff; opacity: 0; pointer-events: none; transition: opacity .25s; }
+  #shutter { position: absolute; left: 50%; bottom: calc(env(safe-area-inset-bottom, 0px) + 28px); transform: translateX(-50%);
+             width: 76px; height: 76px; border-radius: 50%; border: 5px solid #fff; background: rgba(255,255,255,.35); }
+  #shutter:active { background: #fff; }
+  #endBtn { position: absolute; right: 16px; bottom: calc(env(safe-area-inset-bottom, 0px) + 40px);
+            padding: 14px 22px; font-size: 17px; font-weight: bold; color: #fff; background: #d93025; border: none; border-radius: 12px; }
+  .prog { position: sticky; top: 8px; z-index: 10; margin-top: 12px; box-shadow: 0 2px 8px rgba(0,0,0,.15); }
+  .prog .t { font-weight: bold; text-align: center; }
+  .prog .bar { height: 10px; background: #e0e0e0; border-radius: 5px; margin-top: 8px; overflow: hidden; }
+  .prog .fill { height: 100%; width: 0; background: #1a73e8; transition: width .3s; }
+  .prog.done { background: #e6f4ea; color: #137333; font-size: 18px; }
+  .prog.done .bar { display: none; }
+  .prog.done.warn { background: #fef7e0; color: #b06000; }
+  .item .row { display: flex; align-items: center; gap: 8px; }
+  .item .name { font-size: 12px; color: #888; flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .status { font-size: 12px; padding: 2px 8px; border-radius: 8px; background: #e6f4ea; color: #137333; white-space: nowrap; }
+  .status.warn { background: #fef7e0; color: #b06000; }
+  .status.err { background: #fce8e6; color: #c5221f; }
+  .edit { display: flex; align-items: center; gap: 6px; margin-top: 8px; flex-wrap: wrap; }
+  .edit input[type=number] { font-size: 18px; width: 120px; padding: 6px; }
+  .edit input[type=date] { font-size: 15px; padding: 6px; }
+  .edit button { font-size: 14px; padding: 8px 12px; border: 1px solid #ccc; background: #fff; border-radius: 8px; }
+  .edit button.del { color: #c5221f; }
+</style>
+</head>
+<body>
+  <div class="card sel">
+    <select id="vendor"><option value="">問屋を選択</option></select>
+    <input type="date" id="date">
+  </div>
+
+  <div class="card total">
+    <div class="amount" id="total">¥0</div>
+    <div class="sub" id="sub">問屋と日付を選んでください</div>
+  </div>
+
+  <button class="shoot off" id="b0" onclick="openCam()">📸 連続撮影（アプリ内カメラ）</button>
+  <label class="shoot secondary off" id="b1">📷 標準カメラで1枚ずつ撮影
+    <input type="file" id="file" accept="image/*" capture="environment" multiple>
+  </label>
+  <label class="shoot secondary off" id="b2">🖼 撮影済みの写真から選ぶ
+    <input type="file" id="gallery" accept="image/*" multiple>
+  </label>
+
+  <div id="cam">
+    <video id="cv" playsinline autoplay muted></video>
+    <div id="camStat"></div>
+    <div id="flash"></div>
+    <div id="camMsg"></div>
+    <img id="lastImg" alt="">
+    <button id="shutter" aria-label="撮影" onclick="shoot()" disabled></button>
+    <button id="endBtn" onclick="closeCam()">終了</button>
+  </div>
+
+  <div id="prog" class="card prog" style="display:none" onclick="if(!running)this.style.display='none'">
+    <div class="t" id="progText"></div>
+    <div class="bar"><div class="fill" id="fill"></div></div>
+  </div>
+
+  <div id="list" style="margin-top:12px"></div>
+
+<script>
+  const MAX_SIDE = 2000, QUALITY = 0.85;
+  const $ = id => document.getElementById(id);
+  const fmt = n => '¥' + Number(n).toLocaleString('ja-JP');
+  const today = () => { const d = new Date(), p = n => String(n).padStart(2, '0');
+    return d.getFullYear() + '-' + p(d.getMonth() + 1) + '-' + p(d.getDate()); };
+
+  $('date').value = today();
+
+  // ★ GASをデプロイして発行された「ウェブアプリのURL」(/exec で終わるもの)をここに貼る
+  const GAS_URL = 'ここにGASのウェブアプリURLを貼る';
+
+  function getPass() {
+    let p = null;
+    try { p = localStorage.getItem('nouhin_pass'); } catch (e) {}
+    if (!p) {
+      p = prompt('合言葉を入力してください');
+      if (p) { try { localStorage.setItem('nouhin_pass', p); } catch (e) {} }
+    }
+    return p;
+  }
+
+  // GASのAPIを呼ぶ（Content-Typeは指定しない：指定すると事前確認が走ってGASが受け付けない）
+  async function run(fn, ...args) {
+    const pass = getPass();
+    if (!pass) throw new Error('合言葉が必要です');
+    let res;
+    try {
+      res = await fetch(GAS_URL, { method: 'POST', body: JSON.stringify({ pass: pass, fn: fn, args: args }) });
+    } catch (e) {
+      throw new Error('通信できませんでした（電波・URLを確認してください）');
+    }
+    let j;
+    try { j = await res.json(); } catch (e) { throw new Error('サーバーの応答を読み取れません（GASのURLとアクセス設定を確認）'); }
+    if (!j.ok) {
+      if (j.error === 'AUTH') {
+        try { localStorage.removeItem('nouhin_pass'); } catch (e) {}
+        throw new Error('合言葉が違います。もう一度操作して入力し直してください');
+      }
+      throw new Error(j.error);
+    }
+    return j.data;
+  }
+
+  run('getVendors').then(list => {
+    list.forEach(v => { const o = document.createElement('option'); o.value = o.textContent = v; $('vendor').appendChild(o); });
+  });
+
+  function ready() {
+    const ok = $('vendor').value && $('date').value;
+    $('b0').classList.toggle('off', !ok);
+    $('b1').classList.toggle('off', !ok);
+    $('b2').classList.toggle('off', !ok);
+    return ok;
+  }
+
+  async function refresh() {
+    if (!ready()) { $('total').textContent = '¥0'; $('sub').textContent = '問屋と日付を選んでください'; return; }
+    renderSummary(await run('getSummary', $('vendor').value, $('date').value));
+  }
+  function renderSummary(s) {
+    $('total').textContent = fmt(s.total);
+    $('sub').textContent = $('vendor').value + ' ' + $('date').value + '：' + s.count + '枚　／　全体合計 ' + fmt(s.grand);
+  }
+  $('vendor').onchange = refresh;
+  $('date').onchange = refresh;
+
+  // ---- 処理キュー（進捗表示と完了の合図） ----
+  const queue = [];
+  let running = false;
+  let stat = { total: 0, done: 0, warn: 0 };
+  let audioCtx = null;
+
+  function unlockAudio() {   // iPhoneは操作中に一度音を有効化しておく必要がある
+    try {
+      const C = window.AudioContext || window.webkitAudioContext;
+      audioCtx = audioCtx || new C();
+      if (audioCtx.state === 'suspended') audioCtx.resume();
+    } catch (e) {}
+  }
+  function beep() {
+    try {
+      [0, 0.18].forEach(t => {
+        const o = audioCtx.createOscillator(), g = audioCtx.createGain();
+        o.frequency.value = 880; g.gain.value = 0.25;
+        o.connect(g); g.connect(audioCtx.destination);
+        o.start(audioCtx.currentTime + t); o.stop(audioCtx.currentTime + t + 0.12);
+      });
+    } catch (e) {}
+  }
+
+  function showProgress() {
+    const p = $('prog');
+    p.style.display = 'block';
+    p.className = 'card prog';
+    $('progText').textContent = '処理中 ' + stat.done + ' / ' + stat.total + ' 枚　（画面を閉じないでください）';
+    $('fill').style.width = (stat.total ? stat.done / stat.total * 100 : 0) + '%';
+    document.title = '処理中 ' + stat.done + '/' + stat.total;
+    updateCamStat();
+  }
+  function showDone() {
+    const p = $('prog');
+    p.className = 'card prog done' + (stat.warn ? ' warn' : '');
+    $('progText').textContent = '✅ 完了！ ' + stat.total + '枚を処理しました' +
+      (stat.warn ? '（要確認・失敗 ' + stat.warn + '枚）' : '');
+    document.title = '完了';
+    beep();
+  }
+
+  async function work() {
+    running = true;
+    do {
+      while (queue.length) {
+        const t = queue.shift();
+        const status = await handleFile(t.f, t.vendor, t.date);
+        stat.done++;
+        if (status !== 'OK' && status !== '手修正') stat.warn++;
+        showProgress();
+      }
+      await refresh();
+    } while (queue.length);   // 待っている間に撮影された分があれば続ける
+    running = false;
+    showDone();
+  }
+
+  function enqueue(items) {
+    unlockAudio();
+    if (!running) stat = { total: 0, done: 0, warn: 0 };
+    items.forEach(i => queue.push(i));
+    stat.total += items.length;
+    showProgress();
+    if (!running) work();
+  }
+
+  ['file', 'gallery'].forEach(id => {
+    $(id).addEventListener('change', (e) => {
+      const files = Array.from(e.target.files);
+      e.target.value = '';
+      if (!files.length) return;
+      const vendor = $('vendor').value, date = $('date').value;   // 選択時点の指定を使う
+      enqueue(files.map(f => ({ f: f, vendor: vendor, date: date })));
+    });
+  });
+
+  // ---- アプリ内カメラ（連続撮影） ----
+  let camStream = null, shots = 0, camCtx = { vendor: '', date: '' };
+
+  function updateCamStatForce() {
+    $('camStat').textContent = camCtx.vendor + '　' + camCtx.date + '　撮影 ' + shots + '枚 ／ 処理済 ' + stat.done + '枚';
+  }
+  function updateCamStat() {
+    if ($('cam').style.display !== 'block') return;
+    $('camStat').textContent = camCtx.vendor + '　' + camCtx.date + '　撮影 ' + shots + '枚 ／ 処理済 ' + stat.done + '枚';
+  }
+
+  let camToken = 0;
+
+  function camErrText(err) {
+    const n = err && err.name;
+    if (n === 'NotAllowedError' || n === 'SecurityError')
+      return 'カメラの使用が許可されていません。\n\n【iPhoneの確認方法】\nSafariのアドレスバー左の「ぁあ」→「Webサイトの設定」→「カメラ」を「許可」にして、ページを再読み込みしてください。\n\n' + n;
+    if (n === 'NotFoundError' || n === 'OverconstrainedError') return 'カメラが見つかりません。\n' + n;
+    return 'カメラを起動できません。\n' + (n || '') + ' ' + ((err && err.message) || err);
+  }
+
+  function openCam() {
+    if (!ready()) return;
+    if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
+      alert('この環境ではアプリ内カメラを使えません。「標準カメラで1枚ずつ撮影」をご利用ください。');
+      return;
+    }
+    // ボタンを押した直後に最優先でカメラを要求する（許可の確認は、操作の流れの中で出す必要がある）
+    const req = navigator.mediaDevices.getUserMedia({
+      video: { facingMode: { ideal: 'environment' }, width: { ideal: 1920 }, height: { ideal: 1440 } },
+      audio: false
+    });
+    unlockAudio();
+
+    const my = ++camToken;
+    shots = 0;
+    camCtx = { vendor: $('vendor').value, date: $('date').value };
+    $('lastImg').style.display = 'none';
+    $('shutter').disabled = true;
+    $('camMsg').textContent = 'カメラを起動しています…';
+    $('cam').style.display = 'block';
+    updateCamStatForce();
+
+    req.then(stream => {
+      if (my !== camToken) { stream.getTracks().forEach(t => t.stop()); return; }   // 起動待ち中に終了された
+      camStream = stream;
+      const v = $('cv');
+      v.srcObject = stream;
+      return v.play();
+    }).then(() => {
+      if (my !== camToken) return;
+      $('camMsg').textContent = '';
+      $('shutter').disabled = false;
+      updateCamStat();
+    }).catch(err => {
+      if (my !== camToken) return;
+      closeCam();
+      alert(camErrText(err) + '\n\n「標準カメラで1枚ずつ撮影」も使えます。');
+    });
+  }
+
+  function closeCam() {
+    camToken++;
+    if (camStream) camStream.getTracks().forEach(t => t.stop());
+    camStream = null;
+    $('cv').srcObject = null;
+    $('cam').style.display = 'none';
+  }
+
+  function shoot() {
+    const v = $('cv');
+    if (!camStream || !v.videoWidth) return;
+    const k = Math.min(1, MAX_SIDE / Math.max(v.videoWidth, v.videoHeight));
+    const c = document.createElement('canvas');
+    c.width = Math.round(v.videoWidth * k);
+    c.height = Math.round(v.videoHeight * k);
+    c.getContext('2d').drawImage(v, 0, 0, c.width, c.height);
+    const url = c.toDataURL('image/jpeg', QUALITY);
+
+    shots++;
+    const li = $('lastImg'); li.src = url; li.style.display = 'block';
+    const f = $('flash');                       // 撮れたことが分かる一瞬の点滅
+    f.style.transition = 'none'; f.style.opacity = 0.8;
+    requestAnimationFrame(() => { f.style.transition = 'opacity .25s'; f.style.opacity = 0; });
+
+    enqueue([{ f: url, vendor: camCtx.vendor, date: camCtx.date }]);   // 保存・OCRを待たずに次を撮れる
+    updateCamStat();
+  }
+
+  async function handleFile(file, vendor, date) {
+    const item = document.createElement('div');
+    item.className = 'card item';
+    item.innerHTML = '<div class="row"><span class="name">アップロード中…</span></div>';
+    $('list').prepend(item);
+    try {
+      const res = await run('uploadAndOcr', typeof file === 'string' ? file : await resize(file), vendor, date);
+      renderItem(item, res);
+      return res.status;
+    } catch (err) {
+      item.innerHTML = '<div class="row"><span class="status err">失敗</span><span class="name">' + (err.message || err) + '</span></div>';
+      return '失敗';
+    }
+  }
+
+  function renderItem(item, res) {
+    const cls = res.status === 'OK' || res.status === '手修正' ? '' : res.status.startsWith('要確認') ? 'warn' : 'err';
+    item.innerHTML =
+      '<div class="row"><span class="status ' + cls + '">' + res.status + '</span>' +
+      '<span class="name">' + res.vendor + '　' + res.name + '</span></div>' +
+      '<div class="edit">¥<input type="number" inputmode="numeric" class="amt" value="' + (res.amount === '' ? '' : res.amount) + '">' +
+      '<input type="date" class="dt" value="' + res.date + '">' +
+      '<button class="save">保存</button><button class="del">削除</button></div>';
+
+    item.querySelector('.save').onclick = async () => {
+      const amt = item.querySelector('.amt').value, dt = item.querySelector('.dt').value;
+      try {
+        const s = await run('updateEntry', res.id, amt, dt);
+        const changed = String(amt) !== String(res.amount);
+        renderItem(item, Object.assign(res, { amount: amt === '' ? '' : Number(amt), date: dt, status: changed ? '手修正' : res.status }));
+        refresh();
+      } catch (err) { alert(err.message || err); }
+    };
+    item.querySelector('.del').onclick = async () => {
+      if (!confirm('この伝票を削除しますか？')) return;
+      try { await run('deleteEntry', res.id); item.remove(); refresh(); }
+      catch (err) { alert(err.message || err); }
+    };
+  }
+
+  function resize(file) {
+    return new Promise((resolve, reject) => {
+      const img = new Image(), url = URL.createObjectURL(file);
+      img.onload = () => {
+        const k = Math.min(1, MAX_SIDE / Math.max(img.width, img.height));
+        const c = document.createElement('canvas');
+        c.width = Math.round(img.width * k); c.height = Math.round(img.height * k);
+        c.getContext('2d').drawImage(img, 0, 0, c.width, c.height);
+        URL.revokeObjectURL(url);
+        resolve(c.toDataURL('image/jpeg', QUALITY));
+      };
+      img.onerror = () => reject(new Error('画像を読み込めません'));
+      img.src = url;
+    });
+  }
+</script>
+</body>
+</html>
