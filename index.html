@@ -6,6 +6,7 @@
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-title" content="納品伝票">
 <title>納品伝票スキャン</title>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/qrcodejs/1.0.0/qrcode.min.js"></script>
 <style>
   body { font-family: -apple-system, "Hiragino Sans", sans-serif; margin: 0; padding: 16px; background: #f5f5f5; color: #222; }
   .card { background: #fff; border-radius: 12px; padding: 14px; margin-bottom: 12px; }
@@ -19,6 +20,37 @@
   .shoot.secondary { background: #fff; color: #1a73e8; border: 2px solid #1a73e8; }
   .shoot.off { opacity: .4; pointer-events: none; }
   input[type=file] { display: none; }
+  #login { position: fixed; inset: 0; z-index: 200; background: #f5f5f5; display: none; overflow-y: auto; padding: 24px 16px; box-sizing: border-box; }
+  #login .box { max-width: 420px; margin: 40px auto 0; background: #fff; border-radius: 14px; padding: 22px; }
+  #login h2 { margin: 0 0 6px; font-size: 20px; }
+  #login p { margin: 4px 0 14px; color: #666; font-size: 14px; }
+  #login input { width: 100%; box-sizing: border-box; font-size: 22px; padding: 12px; border: 1px solid #ccc; border-radius: 10px; margin-bottom: 10px; }
+  #codeIn { text-align: center; letter-spacing: 8px; }
+  #login button.main { width: 100%; padding: 14px; font-size: 18px; font-weight: bold; color: #fff; background: #1a73e8; border: none; border-radius: 10px; }
+  #login .err { color: #c5221f; font-size: 14px; min-height: 20px; margin-bottom: 8px; }
+  #login .link { background: none; border: none; color: #1a73e8; font-size: 14px; margin-top: 14px; padding: 4px; }
+  #adminForm { display: none; }
+  #adminBox .code { font-size: 44px; font-weight: bold; letter-spacing: 8px; text-align: center; margin: 10px 0 4px; }
+  #adminBox .left { text-align: center; color: #666; font-size: 14px; }
+  #adminBox #qr { display: flex; justify-content: center; margin: 12px 0; }
+  #adminBox input { font-size: 16px; padding: 10px; border: 1px solid #ccc; border-radius: 8px; width: 100%; box-sizing: border-box; margin: 6px 0; }
+  #adminBox button { font-size: 15px; padding: 10px 14px; border: 1px solid #ccc; background: #fff; border-radius: 8px; }
+  #adminBox button.main { background: #1a73e8; color: #fff; border: none; width: 100%; font-weight: bold; padding: 13px; }
+  .dev { display: flex; align-items: center; gap: 8px; padding: 8px 0; border-top: 1px solid #eee; font-size: 14px; }
+  .dev .info { flex: 1; min-width: 0; }
+  .dev .sub2 { color: #888; font-size: 12px; }
+  .dev .st { font-size: 12px; padding: 2px 8px; border-radius: 8px; background: #fce8e6; color: #c5221f; }
+  #authOk { position: fixed; inset: 0; z-index: 300; display: flex; flex-direction: column; align-items: center; justify-content: center;
+            background: rgba(19,115,55,.92); color: #fff; animation: authFade 1.9s ease forwards; pointer-events: none; }
+  #authOk svg { width: 130px; height: 130px; }
+  #authOk circle { fill: none; stroke: #fff; stroke-width: 5; stroke-dasharray: 302; stroke-dashoffset: 302; animation: authDraw .55s ease forwards; }
+  #authOk path { fill: none; stroke: #fff; stroke-width: 7; stroke-linecap: round; stroke-linejoin: round;
+                 stroke-dasharray: 80; stroke-dashoffset: 80; animation: authDraw .35s .45s ease forwards; }
+  #authOk .msg { margin-top: 18px; font-size: 26px; font-weight: bold; animation: authPop .4s .6s ease both; }
+  #authOk .sub { margin-top: 6px; font-size: 15px; opacity: .85; animation: authPop .4s .75s ease both; }
+  @keyframes authDraw { to { stroke-dashoffset: 0; } }
+  @keyframes authPop { from { opacity: 0; transform: scale(.7); } to { opacity: 1; transform: scale(1); } }
+  @keyframes authFade { 0%, 80% { opacity: 1; } 100% { opacity: 0; } }
   #cam { display: none; position: fixed; inset: 0; background: #000; z-index: 100; }
   #cam video { width: 100%; height: 100%; object-fit: contain; background: #000; }
   #camStat { position: absolute; top: 0; left: 0; right: 0; padding: calc(env(safe-area-inset-top, 0px) + 10px) 12px 10px;
@@ -52,6 +84,27 @@
 </style>
 </head>
 <body>
+  <div id="login">
+    <div class="box">
+      <h2>納品伝票スキャン</h2>
+      <div id="codeForm">
+        <p>管理者から受け取った<b>6桁のコード</b>を入力してください。<br>（QRコードを読み取ると自動で入力されます）</p>
+        <input id="codeIn" inputmode="numeric" maxlength="6" placeholder="000000" autocomplete="one-time-code">
+        <div class="err" id="loginErr"></div>
+        <button class="main" id="codeBtn">ログイン</button>
+        <button class="link" id="toAdmin">管理者としてログイン</button>
+      </div>
+      <div id="adminForm">
+        <p>管理者用の合言葉と、この端末の名前を入力してください。</p>
+        <input id="adminPass" type="password" placeholder="合言葉" autocomplete="current-password">
+        <input id="adminLabel" type="text" placeholder="この端末の名前（例：管理者iPhone）" value="管理者" style="font-size:16px">
+        <div class="err" id="adminErr"></div>
+        <button class="main" id="adminBtn">管理者としてログイン</button>
+        <button class="link" id="toCode">コードでログインに戻る</button>
+      </div>
+    </div>
+  </div>
+
   <div class="card sel">
     <select id="vendor"><option value="">問屋を選択</option></select>
     <input type="date" id="date">
@@ -87,6 +140,21 @@
 
   <div id="list" style="margin-top:12px"></div>
 
+  <div id="adminBox" class="card" style="display:none; margin-top:24px">
+    <div style="font-weight:bold; margin-bottom:6px">🔑 管理者メニュー</div>
+    <input id="devLabel" type="text" maxlength="30" placeholder="追加する端末の名前（例：受付iPhone）">
+    <button class="main" id="issueBtn">ログインコードを発行</button>
+    <div id="codeOut" style="display:none">
+      <div class="code" id="codeBig"></div>
+      <div class="left" id="codeLeft"></div>
+      <div id="qr"></div>
+    </div>
+    <div style="margin-top:16px; display:flex; align-items:center; justify-content:space-between">
+      <b style="font-size:14px">登録済みの端末</b><button id="devReload">更新</button>
+    </div>
+    <div id="devList"></div>
+  </div>
+
 <script>
   const MAX_SIDE = 2000, QUALITY = 0.85;
   const $ = id => document.getElementById(id);
@@ -96,44 +164,172 @@
 
   $('date').value = today();
 
-  // ★ をデプロイして発行された「ウェブアプリのURL」(/exec で終わるもの)をここに貼る
+  // ★ GASをデプロイして発行された「ウェブアプリのURL」(/exec で終わるもの)をここに貼る
   const GAS_URL = 'https://script.google.com/macros/s/AKfycbwxseSfBxv7Wuv_KtLYq10JYGoOyOvQ0EaUMWw2lkUlI4k97Zg7YtuopedpPHSiC1La/exec';
 
-  function getPass() {
-    let p = null;
-    try { p = localStorage.getItem('nouhin_pass'); } catch (e) {}
-    if (!p) {
-      p = prompt('合言葉を入力してください');
-      if (p) { try { localStorage.setItem('nouhin_pass', p); } catch (e) {} }
-    }
-    return p;
+  // ---- 端末の登録とログイン ----
+  const TOKEN_KEY = 'nouhin_token';
+  let me = null, vendorsLoaded = false;
+
+  const getToken = () => { try { return localStorage.getItem(TOKEN_KEY); } catch (e) { return null; } };
+  const setToken = t => { try { localStorage.setItem(TOKEN_KEY, t); } catch (e) {} };
+  const clearToken = () => { try { localStorage.removeItem(TOKEN_KEY); } catch (e) {} };
+
+  function showAuthOk() {
+    const d = document.createElement('div');
+    d.id = 'authOk';
+    d.innerHTML = '<svg viewBox="0 0 100 100"><circle cx="50" cy="50" r="48"/><path d="M28 52 L44 68 L73 34"/></svg>' +
+                  '<div class="msg">認証OK</div><div class="sub">ようこそ</div>';
+    document.body.appendChild(d);
+    setTimeout(() => d.remove(), 1900);
+    try {   // 上がっていく2音のチャイム（消音スイッチがオンの間は鳴りません）
+      const C = window.AudioContext || window.webkitAudioContext;
+      const ctx = new C();
+      if (ctx.state === 'suspended') ctx.resume();
+      [[660, 0], [880, 0.14]].forEach(([f, t]) => {
+        const o = ctx.createOscillator(), g = ctx.createGain();
+        o.frequency.value = f; o.connect(g); g.connect(ctx.destination);
+        g.gain.setValueAtTime(0.0001, ctx.currentTime + t);
+        g.gain.exponentialRampToValueAtTime(0.25, ctx.currentTime + t + 0.02);
+        g.gain.exponentialRampToValueAtTime(0.0001, ctx.currentTime + t + 0.35);
+        o.start(ctx.currentTime + t); o.stop(ctx.currentTime + t + 0.4);
+      });
+    } catch (e) {}
   }
 
-  // GASのAPIを呼ぶ（Content-Typeは指定しない：指定すると事前確認が走ってGASが受け付けない）
-  async function run(fn, ...args) {
-    const pass = getPass();
-    if (!pass) throw new Error('合言葉が必要です');
+  // GASを呼ぶ。Content-Typeは指定しない（指定すると事前確認が走ってGASが受け付けない）
+  async function call(fn, args, withToken) {
     let res;
     try {
-      res = await fetch(GAS_URL, { method: 'POST', body: JSON.stringify({ pass: pass, fn: fn, args: args }) });
+      res = await fetch(GAS_URL, { method: 'POST',
+        body: JSON.stringify({ token: withToken ? getToken() : undefined, fn: fn, args: args }) });
     } catch (e) {
       throw new Error('通信できませんでした（電波・URLを確認してください）');
     }
     let j;
     try { j = await res.json(); } catch (e) { throw new Error('サーバーの応答を読み取れません（GASのURLとアクセス設定を確認）'); }
     if (!j.ok) {
-      if (j.error === 'AUTH') {
-        try { localStorage.removeItem('nouhin_pass'); } catch (e) {}
-        throw new Error('合言葉が違います。もう一度操作して入力し直してください');
-      }
+      if (j.error === 'AUTH' && withToken) { clearToken(); me = null; showLogin(''); throw new Error('ログインが無効になりました。もう一度ログインしてください'); }
       throw new Error(j.error);
     }
     return j.data;
   }
+  const run = (fn, ...args) => call(fn, args, true);
 
-  run('getVendors').then(list => {
-    list.forEach(v => { const o = document.createElement('option'); o.value = o.textContent = v; $('vendor').appendChild(o); });
-  });
+  function showLogin(msg) {
+    $('login').style.display = 'block';
+    $('loginErr').textContent = msg || '';
+  }
+
+  function onLoggedIn(dev, fresh) {
+    me = dev;
+    $('login').style.display = 'none';
+    $('adminBox').style.display = dev.role === 'admin' ? 'block' : 'none';
+    if (fresh) showAuthOk();
+    if (!vendorsLoaded) {
+      vendorsLoaded = true;
+      run('getVendors').then(list => {
+        list.forEach(v => { const o = document.createElement('option'); o.value = o.textContent = v; $('vendor').appendChild(o); });
+      }).catch(() => { vendorsLoaded = false; });
+    }
+    refresh();
+    if (dev.role === 'admin') loadDevices();
+  }
+
+  async function doCodeLogin(code) {
+    $('loginErr').textContent = '';
+    try {
+      const r = await call('login', [code], false);
+      setToken(r.token);
+      onLoggedIn({ id: r.id, label: r.label, role: r.role }, true);
+    } catch (e) { $('loginErr').textContent = e.message; }
+  }
+
+  $('codeBtn').onclick = () => doCodeLogin($('codeIn').value.trim());
+  $('codeIn').oninput = () => { if ($('codeIn').value.trim().length === 6) doCodeLogin($('codeIn').value.trim()); };
+  $('toAdmin').onclick = () => { $('codeForm').style.display = 'none'; $('adminForm').style.display = 'block'; };
+  $('toCode').onclick = () => { $('adminForm').style.display = 'none'; $('codeForm').style.display = 'block'; };
+  $('adminBtn').onclick = async () => {
+    $('adminErr').textContent = '';
+    try {
+      const r = await call('adminLogin', [$('adminPass').value, $('adminLabel').value], false);
+      $('adminPass').value = '';
+      setToken(r.token);
+      onLoggedIn({ id: r.id, label: r.label, role: r.role }, true);
+    } catch (e) { $('adminErr').textContent = e.message === 'AUTH' ? '合言葉が違います' : e.message; }
+  };
+
+  // ---- 管理者メニュー ----
+  let codeTimer = null;
+
+  $('issueBtn').onclick = async () => {
+    try {
+      const r = await run('issueCode', $('devLabel').value.trim());
+      $('codeBig').textContent = r.code;
+      $('codeOut').style.display = 'block';
+      $('qr').innerHTML = '';
+      const url = location.origin + location.pathname + '#c=' + r.code;
+      if (typeof QRCode !== 'undefined') new QRCode($('qr'), { text: url, width: 200, height: 200 });
+      let left = r.ttl;
+      clearInterval(codeTimer);
+      const tick = () => {
+        if (left <= 0) {
+          clearInterval(codeTimer);
+          $('codeLeft').textContent = '有効期限が切れました。もう一度発行してください';
+          $('codeBig').style.opacity = 0.25; $('qr').style.opacity = 0.25;
+          return;
+        }
+        $('codeBig').style.opacity = 1; $('qr').style.opacity = 1;
+        $('codeLeft').textContent = '残り ' + Math.floor(left / 60) + ':' + String(left % 60).padStart(2, '0') + '（1回だけ使えます）';
+        left--;
+      };
+      tick(); codeTimer = setInterval(tick, 1000);
+      $('devLabel').value = '';
+    } catch (e) { alert(e.message); }
+  };
+
+  async function loadDevices() {
+    try {
+      const list = await run('listDevices');
+      const box = $('devList');
+      box.innerHTML = '';
+      list.forEach(d => {
+        const row = document.createElement('div'); row.className = 'dev';
+        const info = document.createElement('div'); info.className = 'info';
+        const t = document.createElement('div');
+        t.textContent = d.label + (d.role === 'admin' ? '（管理者）' : '') + (me && d.id === me.id ? '　← この端末' : '');
+        const s = document.createElement('div'); s.className = 'sub2';
+        s.textContent = '最終使用 ' + d.lastUsed;
+        info.appendChild(t); info.appendChild(s); row.appendChild(info);
+        if (d.status === '有効') {
+          if (!(me && d.id === me.id)) {
+            const b = document.createElement('button'); b.textContent = '無効にする';
+            b.onclick = async () => {
+              if (!confirm('「' + d.label + '」を無効にしますか？\nこの端末は、次の操作でログイン画面に戻ります。')) return;
+              try { await run('revokeDevice', d.id); loadDevices(); } catch (e) { alert(e.message); }
+            };
+            row.appendChild(b);
+          }
+        } else {
+          const st = document.createElement('span'); st.className = 'st'; st.textContent = d.status; row.appendChild(st);
+        }
+        box.appendChild(row);
+      });
+    } catch (e) { $('devList').textContent = e.message; }
+  }
+  $('devReload').onclick = loadDevices;
+
+  // ---- 起動時 ----
+  (async function start() {
+    const m = location.hash.match(/c=(\d{6})/);
+    if (m) history.replaceState(null, '', location.pathname + location.search);   // QRのコードをURLから消す
+    if (getToken()) {
+      try { onLoggedIn(await call('whoami', [], true), false); return; }
+      catch (e) { if (!$('login').style.display || $('login').style.display === 'none') showLogin(e.message); return; }
+    }
+    showLogin('');
+    if (m) doCodeLogin(m[1]);
+  })();
 
   function ready() {
     const ok = $('vendor').value && $('date').value;
